@@ -3,7 +3,16 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 
 const app = express();
-const PORT = 3000;
+
+/*
+|--------------------------------------------------------------------------
+| Porta da aplicação
+|--------------------------------------------------------------------------
+| No Elastic Beanstalk, a AWS fornece a porta pela variável PORT.
+| Localmente, a aplicação utilizará a porta 3000.
+*/
+
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
@@ -46,66 +55,81 @@ const produtos = [
 const swaggerOptions = {
     definition: {
         openapi: '3.0.0',
+
         info: {
             title: 'API de Produtos',
             version: '1.0.0',
-            description: 'API REST de produtos utilizando Node.js, Express e cache em memória'
+            description:
+                'API REST de produtos utilizando Node.js, Express e cache em memória'
         },
+
         servers: [
             {
-                url: `http://localhost:${PORT}`,
-                description: 'Servidor local'
+                url: '/',
+                description: 'Servidor da aplicação'
             }
         ],
+
         components: {
             schemas: {
                 ProdutoRequest: {
                     type: 'object',
+
                     required: [
                         'nome',
                         'preco',
                         'quantidade'
                     ],
+
                     properties: {
                         nome: {
                             type: 'string',
                             example: 'Monitor LG'
                         },
+
                         preco: {
                             type: 'number',
                             format: 'double',
                             example: 1200.00
                         },
+
                         quantidade: {
                             type: 'integer',
                             example: 8
                         }
                     }
                 },
+
                 ProdutoResponse: {
                     type: 'object',
+
                     properties: {
                         id: {
                             type: 'integer',
                             example: 1
                         },
+
                         nome: {
                             type: 'string',
                             example: 'Monitor LG'
                         },
+
                         preco: {
                             type: 'number',
                             format: 'double',
                             example: 1200.00
                         },
+
                         quantidade: {
                             type: 'integer',
                             example: 8
                         }
                     }
                 },
+
                 Erro: {
                     type: 'object',
+
                     properties: {
                         mensagem: {
                             type: 'string',
@@ -116,6 +140,7 @@ const swaggerOptions = {
             }
         }
     },
+
     apis: ['./index.js']
 };
 
@@ -143,11 +168,57 @@ app.use(
  *     responses:
  *       200:
  *         description: API em funcionamento
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 mensagem:
+ *                   type: string
+ *                   example: API de produtos em funcionamento.
+ *                 documentacao:
+ *                   type: string
+ *                   example: /swagger
  */
 app.get('/', (request, response) => {
     response.status(200).json({
         mensagem: 'API de produtos em funcionamento.',
-        documentacao: `http://localhost:${PORT}/swagger`
+        documentacao: '/swagger'
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| Health check
+|--------------------------------------------------------------------------
+| Essa rota pode ser utilizada pelo Elastic Beanstalk para verificar
+| se a aplicação está funcionando corretamente.
+*/
+
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Verifica a saúde da aplicação
+ *     tags:
+ *       - Aplicação
+ *     responses:
+ *       200:
+ *         description: Aplicação funcionando
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: UP
+ */
+app.get('/health', (request, response) => {
+    response.status(200).json({
+        status: 'UP',
+        aplicacao: 'api-produtos',
+        dataHora: new Date().toISOString()
     });
 });
 
@@ -323,8 +394,16 @@ app.post('/api/produtos', (request, response) => {
  *               $ref: '#/components/schemas/ProdutoResponse'
  *       400:
  *         description: Dados inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Erro'
  *       404:
  *         description: Produto não encontrado
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Erro'
  */
 app.put('/api/produtos/:id', (request, response) => {
     const id = Number(request.params.id);
@@ -387,6 +466,10 @@ app.put('/api/produtos/:id', (request, response) => {
  *         description: Produto excluído com sucesso
  *       404:
  *         description: Produto não encontrado
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Erro'
  */
 app.delete('/api/produtos/:id', (request, response) => {
     const id = Number(request.params.id);
@@ -462,9 +545,16 @@ function validarProduto(produto) {
 |--------------------------------------------------------------------------
 | Inicialização da aplicação
 |--------------------------------------------------------------------------
+| O endereço 0.0.0.0 permite que a aplicação receba conexões externas
+| dentro do ambiente do Elastic Beanstalk.
 */
 
-app.listen(PORT, () => {
-    console.log(`API executando em: http://localhost:${PORT}`);
-    console.log(`Swagger disponível em: http://localhost:${PORT}/swagger`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log('------------------------------------------');
+    console.log('API de produtos iniciada com sucesso.');
+    console.log(`Porta: ${PORT}`);
+    console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Swagger: /swagger`);
+    console.log(`Health check: /health`);
+    console.log('------------------------------------------');
 });
