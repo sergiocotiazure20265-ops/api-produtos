@@ -1,0 +1,35 @@
+# PIPELINE CI/CD para implantação na AWS
+name: Pipeline Node.js
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Executar build
+        run: echo "Executando o BUILD da aplicação Node.js..."
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Executar testes
+        run: echo "Executando os TESTES da aplicação Node.js..."
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - name: Executar deploy
+        run: echo "Executando o DEPLOY da aplicação Node.js..."
