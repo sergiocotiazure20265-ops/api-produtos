@@ -6,7 +6,7 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const { Pool } = require('pg');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
