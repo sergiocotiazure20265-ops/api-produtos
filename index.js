@@ -57,7 +57,7 @@ const swaggerOptions = {
         openapi: '3.0.0',
 
         info: {
-            title: 'API de Produtos',
+            title: 'API de Produtos - Treinamento AWS COTI Informática',
             version: '1.0.0',
             description:
                 'API REST de produtos utilizando Node.js, Express e cache em memória'
