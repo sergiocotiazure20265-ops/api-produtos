@@ -21,7 +21,9 @@
   },
   "homepage": "https://github.com/sergiocotiazure20265-ops/api-produtos#readme",
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "pg": "^8.22.0",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"
   }

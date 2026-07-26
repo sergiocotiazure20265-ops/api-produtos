@@ -1,50 +1,35 @@
+require('dotenv').config();
+
 const express = require('express');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
+const { Pool } = require('pg');
 
 const app = express();
-
-/*
-|--------------------------------------------------------------------------
-| Porta da aplicação
-|--------------------------------------------------------------------------
-| No Elastic Beanstalk, a AWS fornece a porta pela variável PORT.
-| Localmente, a aplicação utilizará a porta 3000.
-*/
-
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 app.use(express.json());
 
 /*
 |--------------------------------------------------------------------------
-| Cache em memória
+| Conexão com PostgreSQL
 |--------------------------------------------------------------------------
-| Os dados serão perdidos quando a aplicação for reiniciada.
 */
 
-let proximoId = 4;
+const pool = new Pool({
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT || 5432),
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    ssl: String(process.env.DB_SSL).toLowerCase() === 'true'
+        ? { rejectUnauthorized: false }
+        : false
+});
 
-const produtos = [
-    {
-        id: 1,
-        nome: 'Notebook Dell',
-        preco: 4500.00,
-        quantidade: 10
-    },
-    {
-        id: 2,
-        nome: 'Mouse Logitech',
-        preco: 150.00,
-        quantidade: 25
-    },
-    {
-        id: 3,
-        nome: 'Teclado Mecânico',
-        preco: 350.00,
-        quantidade: 15
-    }
-];
+pool.on('error', error => {
+    console.error('Erro inesperado na conexão com PostgreSQL:', error);
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -58,9 +43,9 @@ const swaggerOptions = {
 
         info: {
             title: 'API de Produtos - Treinamento AWS COTI Informática',
-            version: '1.0.0',
+            version: '2.0.0',
             description:
-                'API REST de produtos utilizando Node.js, Express e cache em memória'
+                'API REST de produtos utilizando Node.js, Express e PostgreSQL'
         },
 
         servers: [
@@ -141,7 +126,7 @@ const swaggerOptions = {
         }
     },
 
-    apis: ['./index.js']
+    apis: [__filename]
 };
 
 const swaggerDocument = swaggerJsdoc(swaggerOptions);
@@ -176,6 +161,9 @@ app.use(
  *                 mensagem:
  *                   type: string
  *                   example: API de produtos em funcionamento.
+ *                 bancoDados:
+ *                   type: string
+ *                   example: PostgreSQL
  *                 documentacao:
  *                   type: string
  *                   example: /swagger
@@ -183,6 +171,7 @@ app.use(
 app.get('/', (request, response) => {
     response.status(200).json({
         mensagem: 'API de produtos em funcionamento.',
+        bancoDados: 'PostgreSQL',
         documentacao: '/swagger'
     });
 });
@@ -191,35 +180,42 @@ app.get('/', (request, response) => {
 |--------------------------------------------------------------------------
 | Health check
 |--------------------------------------------------------------------------
-| Essa rota pode ser utilizada pelo Elastic Beanstalk para verificar
-| se a aplicação está funcionando corretamente.
 */
 
 /**
  * @swagger
  * /health:
  *   get:
- *     summary: Verifica a saúde da aplicação
+ *     summary: Verifica a saúde da aplicação e do PostgreSQL
  *     tags:
  *       - Aplicação
  *     responses:
  *       200:
- *         description: Aplicação funcionando
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   example: UP
+ *         description: Aplicação e banco funcionando
+ *       503:
+ *         description: Banco de dados indisponível
  */
-app.get('/health', (request, response) => {
-    response.status(200).json({
-        status: 'UP',
-        aplicacao: 'api-produtos',
-        dataHora: new Date().toISOString()
-    });
+app.get('/health', async (request, response) => {
+    try {
+        await pool.query('SELECT 1');
+
+        return response.status(200).json({
+            status: 'UP',
+            aplicacao: 'api-produtos',
+            bancoDados: 'UP',
+            dataHora: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error(error);
+
+        return response.status(503).json({
+            status: 'DOWN',
+            aplicacao: 'api-produtos',
+            bancoDados: 'DOWN',
+            mensagem: 'Não foi possível conectar ao PostgreSQL.',
+            dataHora: new Date().toISOString()
+        });
+    }
 });
 
 /*
@@ -244,9 +240,25 @@ app.get('/health', (request, response) => {
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/ProdutoResponse'
+ *       500:
+ *         description: Erro interno do servidor
  */
-app.get('/api/produtos', (request, response) => {
-    response.status(200).json(produtos);
+app.get('/api/produtos', async (request, response) => {
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                id,
+                nome,
+                preco::double precision AS preco,
+                quantidade
+            FROM produtos
+            ORDER BY id
+        `);
+
+        return response.status(200).json(resultado.rows);
+    } catch (error) {
+        return responderErroBanco(response, error);
+    }
 });
 
 /*
@@ -276,27 +288,43 @@ app.get('/api/produtos', (request, response) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ProdutoResponse'
+ *       400:
+ *         description: ID inválido
  *       404:
  *         description: Produto não encontrado
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Erro'
+ *       500:
+ *         description: Erro interno do servidor
  */
-app.get('/api/produtos/:id', (request, response) => {
+app.get('/api/produtos/:id', async (request, response) => {
     const id = Number(request.params.id);
 
-    const produto = produtos.find(
-        produto => produto.id === id
-    );
-
-    if (!produto) {
-        return response.status(404).json({
-            mensagem: 'Produto não encontrado.'
+    if (!Number.isInteger(id) || id <= 0) {
+        return response.status(400).json({
+            mensagem: 'O ID deve ser um número inteiro maior que zero.'
         });
     }
 
-    response.status(200).json(produto);
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                id,
+                nome,
+                preco::double precision AS preco,
+                quantidade
+            FROM produtos
+            WHERE id = $1
+        `, [id]);
+
+        if (resultado.rowCount === 0) {
+            return response.status(404).json({
+                mensagem: 'Produto não encontrado.'
+            });
+        }
+
+        return response.status(200).json(resultado.rows[0]);
+    } catch (error) {
+        return responderErroBanco(response, error);
+    }
 });
 
 /*
@@ -327,12 +355,10 @@ app.get('/api/produtos/:id', (request, response) => {
  *               $ref: '#/components/schemas/ProdutoResponse'
  *       400:
  *         description: Dados inválidos
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Erro'
+ *       500:
+ *         description: Erro interno do servidor
  */
-app.post('/api/produtos', (request, response) => {
+app.post('/api/produtos', async (request, response) => {
     const { nome, preco, quantidade } = request.body;
 
     const erro = validarProduto({
@@ -347,16 +373,29 @@ app.post('/api/produtos', (request, response) => {
         });
     }
 
-    const produto = {
-        id: proximoId++,
-        nome: nome.trim(),
-        preco: Number(preco),
-        quantidade: Number(quantidade)
-    };
+    try {
+        const resultado = await pool.query(`
+            INSERT INTO produtos (
+                nome,
+                preco,
+                quantidade
+            )
+            VALUES ($1, $2, $3)
+            RETURNING
+                id,
+                nome,
+                preco::double precision AS preco,
+                quantidade
+        `, [
+            nome.trim(),
+            Number(preco),
+            Number(quantidade)
+        ]);
 
-    produtos.push(produto);
-
-    response.status(201).json(produto);
+        return response.status(201).json(resultado.rows[0]);
+    } catch (error) {
+        return responderErroBanco(response, error);
+    }
 });
 
 /*
@@ -394,28 +433,18 @@ app.post('/api/produtos', (request, response) => {
  *               $ref: '#/components/schemas/ProdutoResponse'
  *       400:
  *         description: Dados inválidos
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Erro'
  *       404:
  *         description: Produto não encontrado
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Erro'
+ *       500:
+ *         description: Erro interno do servidor
  */
-app.put('/api/produtos/:id', (request, response) => {
+app.put('/api/produtos/:id', async (request, response) => {
     const id = Number(request.params.id);
     const { nome, preco, quantidade } = request.body;
 
-    const indice = produtos.findIndex(
-        produto => produto.id === id
-    );
-
-    if (indice === -1) {
-        return response.status(404).json({
-            mensagem: 'Produto não encontrado.'
+    if (!Number.isInteger(id) || id <= 0) {
+        return response.status(400).json({
+            mensagem: 'O ID deve ser um número inteiro maior que zero.'
         });
     }
 
@@ -431,14 +460,37 @@ app.put('/api/produtos/:id', (request, response) => {
         });
     }
 
-    produtos[indice] = {
-        id,
-        nome: nome.trim(),
-        preco: Number(preco),
-        quantidade: Number(quantidade)
-    };
+    try {
+        const resultado = await pool.query(`
+            UPDATE produtos
+            SET
+                nome = $1,
+                preco = $2,
+                quantidade = $3,
+                atualizado_em = CURRENT_TIMESTAMP
+            WHERE id = $4
+            RETURNING
+                id,
+                nome,
+                preco::double precision AS preco,
+                quantidade
+        `, [
+            nome.trim(),
+            Number(preco),
+            Number(quantidade),
+            id
+        ]);
 
-    response.status(200).json(produtos[indice]);
+        if (resultado.rowCount === 0) {
+            return response.status(404).json({
+                mensagem: 'Produto não encontrado.'
+            });
+        }
+
+        return response.status(200).json(resultado.rows[0]);
+    } catch (error) {
+        return responderErroBanco(response, error);
+    }
 });
 
 /*
@@ -464,29 +516,38 @@ app.put('/api/produtos/:id', (request, response) => {
  *     responses:
  *       204:
  *         description: Produto excluído com sucesso
+ *       400:
+ *         description: ID inválido
  *       404:
  *         description: Produto não encontrado
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Erro'
+ *       500:
+ *         description: Erro interno do servidor
  */
-app.delete('/api/produtos/:id', (request, response) => {
+app.delete('/api/produtos/:id', async (request, response) => {
     const id = Number(request.params.id);
 
-    const indice = produtos.findIndex(
-        produto => produto.id === id
-    );
-
-    if (indice === -1) {
-        return response.status(404).json({
-            mensagem: 'Produto não encontrado.'
+    if (!Number.isInteger(id) || id <= 0) {
+        return response.status(400).json({
+            mensagem: 'O ID deve ser um número inteiro maior que zero.'
         });
     }
 
-    produtos.splice(indice, 1);
+    try {
+        const resultado = await pool.query(
+            'DELETE FROM produtos WHERE id = $1',
+            [id]
+        );
 
-    response.status(204).send();
+        if (resultado.rowCount === 0) {
+            return response.status(404).json({
+                mensagem: 'Produto não encontrado.'
+            });
+        }
+
+        return response.status(204).send();
+    } catch (error) {
+        return responderErroBanco(response, error);
+    }
 });
 
 /*
@@ -543,18 +604,48 @@ function validarProduto(produto) {
 
 /*
 |--------------------------------------------------------------------------
-| Inicialização da aplicação
+| Tratamento de erros do PostgreSQL
 |--------------------------------------------------------------------------
-| O endereço 0.0.0.0 permite que a aplicação receba conexões externas
-| dentro do ambiente do Elastic Beanstalk.
 */
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log('------------------------------------------');
-    console.log('API de produtos iniciada com sucesso.');
-    console.log(`Porta: ${PORT}`);
-    console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`Swagger: /swagger`);
-    console.log(`Health check: /health`);
-    console.log('------------------------------------------');
-});
+function responderErroBanco(response, error) {
+    console.error('Erro ao acessar PostgreSQL:', error);
+
+    return response.status(500).json({
+        mensagem: 'Erro interno ao acessar o banco de dados.'
+    });
+}
+
+/*
+|--------------------------------------------------------------------------
+| Inicialização da aplicação
+|--------------------------------------------------------------------------
+*/
+
+async function iniciarAplicacao() {
+    try {
+        await pool.query('SELECT 1');
+
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log('------------------------------------------');
+            console.log('API de produtos iniciada com sucesso.');
+            console.log(`Porta: ${PORT}`);
+            console.log(
+                `PostgreSQL: ${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`
+            );
+            console.log('Swagger: /swagger');
+            console.log('Health check: /health');
+            console.log('------------------------------------------');
+        });
+    } catch (error) {
+        console.error(
+            'Não foi possível iniciar a API porque o PostgreSQL está indisponível.'
+        );
+
+        console.error(error);
+
+        process.exit(1);
+    }
+}
+
+iniciarAplicacao();
